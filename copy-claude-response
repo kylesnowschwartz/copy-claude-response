@@ -1,21 +1,85 @@
 #!/bin/bash
 
+# Constants
+PREVIEW_LENGTH=60
+MAX_RESPONSES=99999
+DEFAULT_LIST_COUNT=10
+
+# Function to generate preview text for responses
+generate_preview() {
+    local response="$1"
+    # Get first non-empty line as preview (truncate if too long)
+    # Use printf and avoid tr to preserve UTF-8 encoding
+    local preview=$(printf '%s' "$response" | grep -m1 -v '^[[:space:]]*$' | cut -c1-$PREVIEW_LENGTH | sed 's/[\n\r]//g')
+    if [ -z "$preview" ]; then
+        preview="<empty response>"
+    elif [ ${#preview} -eq $PREVIEW_LENGTH ]; then
+        preview="${preview}..."
+    fi
+    echo "$preview"
+}
+
+# Function to format timestamp as "time ago" display
+format_time_ago() {
+    local timestamp="$1"
+    local time_display=""
+    if [[ -n "$timestamp" ]]; then
+        # Calculate time ago
+        local now_epoch=$(date +%s)
+        local msg_epoch=$(date -d "$timestamp" +%s 2>/dev/null || echo "$now_epoch")
+        local diff_sec=$((now_epoch - msg_epoch))
+        
+        if [[ $diff_sec -lt 60 ]]; then
+            time_display=$(printf "[%4.1f sec ago]" "$diff_sec")
+        elif [[ $diff_sec -lt 3600 ]]; then
+            local diff_min=$(echo "scale=1; $diff_sec / 60" | bc -l 2>/dev/null || echo "$((diff_sec/60))")
+            time_display=$(printf "[%4.1f min ago]" "$diff_min")
+        else
+            local diff_hr=$(echo "scale=2; $diff_sec / 3600" | bc -l 2>/dev/null || echo "$((diff_sec/3600))")
+            time_display=$(printf "[%4.2f hrs ago]" "$diff_hr")
+        fi
+    fi
+    echo "$time_display"
+}
+
+# Function to copy text to clipboard (cross-platform)
+copy_to_clipboard() {
+    local text="$1"
+    if command -v pbcopy >/dev/null 2>&1; then
+        # macOS - printf preserves UTF-8 better than echo
+        printf '%s' "$text" | pbcopy
+    elif command -v xclip >/dev/null 2>&1; then
+        # Linux - printf preserves UTF-8 better than echo
+        printf '%s' "$text" | xclip -selection clipboard
+    elif command -v clip.exe >/dev/null 2>&1; then
+        # Windows/WSL - write to temp file with UTF-8 BOM then read back
+        local temp_file=$(mktemp)
+        printf '\xEF\xBB\xBF%s' "$text" > "$temp_file"
+        powershell.exe -Command "Get-Content -Path '$(wslpath -w "$temp_file")' -Encoding UTF8 | Set-Clipboard"
+        rm "$temp_file"
+    else
+        echo "No clipboard utility found (pbcopy, xclip, or clip.exe)" >&2
+        exit 1
+    fi
+}
+
 # Read hook input to get transcript path and prompt
 INPUT=$(cat)
 TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path' 2>/dev/null)
 PROMPT=$(echo "$INPUT" | jq -r '.prompt' 2>/dev/null)
 
-# Check if this is a copy-response command (with optional number, list, or find)
-if [[ ! "$PROMPT" =~ ^/copy-response([[:space:]]+(list([[:space:]]+[0-9]+)?|find[[:space:]]+\"[^\"]+\"|[0-9]+))?$ ]]; then
+# Check if this is a copy-response command (with optional number, list, find, or debug)
+if [[ ! "$PROMPT" =~ ^/copy-response([[:space:]]+(list([[:space:]]+[0-9]+)?|find[[:space:]]+\"[^\"]+\"|debug([[:space:]]+[0-9]+)?|[0-9]+))?$ ]]; then
     exit 0  # Let other prompts proceed normally
 fi
 
 # Parse the command
 LIST_MODE=false
 FIND_MODE=false
+DEBUG_MODE=false
 SEARCH_TERM=""
 RESPONSE_NUM=1
-LIST_COUNT=10
+LIST_COUNT=$DEFAULT_LIST_COUNT
 
 if [[ "$PROMPT" =~ ^/copy-response[[:space:]]+list([[:space:]]+([0-9]+))?$ ]]; then
     LIST_MODE=true
@@ -25,6 +89,13 @@ if [[ "$PROMPT" =~ ^/copy-response[[:space:]]+list([[:space:]]+([0-9]+))?$ ]]; t
 elif [[ "$PROMPT" =~ ^/copy-response[[:space:]]+find[[:space:]]+\"([^\"]+)\"$ ]]; then
     FIND_MODE=true
     SEARCH_TERM="${BASH_REMATCH[1]}"
+elif [[ "$PROMPT" =~ ^/copy-response[[:space:]]+debug([[:space:]]+([0-9]+))?$ ]]; then
+    DEBUG_MODE=true
+    echo "DEBUG: Matched debug command" >&2
+    if [ -n "${BASH_REMATCH[2]}" ]; then
+        RESPONSE_NUM=${BASH_REMATCH[2]}
+        echo "DEBUG: Set response num to ${BASH_REMATCH[2]}" >&2
+    fi
 elif [[ "$PROMPT" =~ ^/copy-response[[:space:]]+([0-9]+)$ ]]; then
     RESPONSE_NUM=${BASH_REMATCH[1]}
 fi
@@ -35,7 +106,7 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
 fi
 
 # Get the last N assistant responses grouped by requestId (use LIST_COUNT if in list mode, otherwise all responses)
-MAX_RESPONSES=$( [ "$LIST_MODE" = true ] && echo "$LIST_COUNT" || echo 99999 )
+MAX_RESPONSES=$( [ "$LIST_MODE" = true ] && echo "$LIST_COUNT" || echo $MAX_RESPONSES )
 
 # Group responses by requestId and concatenate fragments
 declare -A response_groups
@@ -78,7 +149,8 @@ while read -r line; do
         # Add to order if not already added and response has content
         if [[ ! " ${request_order[@]} " =~ " ${request_id} " ]]; then
             # Only add if the response group has actual content (not just whitespace/newlines)
-            cleaned_content=$(echo "${response_groups[$request_id]}" | tr -d '\n\r\t ' )
+            # Use printf to preserve UTF-8 encoding and avoid tr which can corrupt multibyte chars
+            cleaned_content=$(printf '%s' "${response_groups[$request_id]}" | sed 's/[[:space:]]//g')
             if [[ -n "$cleaned_content" ]]; then
                 request_order+=("$request_id")
                 request_timestamps["$request_id"]="$timestamp"
@@ -110,33 +182,11 @@ if [ "$FIND_MODE" = true ]; then
         # Case-insensitive search in response content
         if echo "${RESPONSES[$i]}" | grep -qi "$SEARCH_TERM"; then
             found_count=$((found_count + 1))
-            # Get first non-empty line as preview (truncate if too long)
-            PREVIEW=$(echo "${RESPONSES[$i]}" | grep -m1 -v '^[[:space:]]*$' | cut -c1-60 | tr -d '\n\r')
-            if [ -z "$PREVIEW" ]; then
-                PREVIEW="<empty response>"
-            elif [ ${#PREVIEW} -eq 60 ]; then
-                PREVIEW="${PREVIEW}..."
-            fi
+            PREVIEW=$(generate_preview "${RESPONSES[$i]}")
             # Get timestamp for this response
             req_id="${request_order[$i]}"
             timestamp="${request_timestamps[$req_id]}"
-            time_display=""
-            if [[ -n "$timestamp" ]]; then
-                # Calculate time ago
-                now_epoch=$(date +%s)
-                msg_epoch=$(date -d "$timestamp" +%s 2>/dev/null || echo "$now_epoch")
-                diff_sec=$((now_epoch - msg_epoch))
-                
-                if [[ $diff_sec -lt 60 ]]; then
-                    time_display=$(printf "[%4.1f sec ago]" "$diff_sec")
-                elif [[ $diff_sec -lt 3600 ]]; then
-                    diff_min=$(echo "scale=1; $diff_sec / 60" | bc -l 2>/dev/null || echo "$((diff_sec/60))")
-                    time_display=$(printf "[%4.1f min ago]" "$diff_min")
-                else
-                    diff_hr=$(echo "scale=2; $diff_sec / 3600" | bc -l 2>/dev/null || echo "$((diff_sec/3600))")
-                    time_display=$(printf "[%4.2f hrs ago]" "$diff_hr")
-                fi
-            fi
+            time_display=$(format_time_ago "$timestamp")
             # Pad response number to align
             num_display=$(printf "%3d" $((i+1)))
             echo "  $num_display $time_display: $PREVIEW" >&2
@@ -155,33 +205,11 @@ if [ "$LIST_MODE" = true ]; then
     echo "Available responses (1-${#RESPONSES[@]}):" >&2
     # Display in reverse order (highest numbers first)
     for i in $(seq $((${#RESPONSES[@]}-1)) -1 0); do
-        # Get first non-empty line as preview (truncate if too long)
-        PREVIEW=$(echo "${RESPONSES[$i]}" | grep -m1 -v '^[[:space:]]*$' | cut -c1-60 | tr -d '\n\r')
-        if [ -z "$PREVIEW" ]; then
-            PREVIEW="<empty response>"
-        elif [ ${#PREVIEW} -eq 60 ]; then
-            PREVIEW="${PREVIEW}..."
-        fi
+        PREVIEW=$(generate_preview "${RESPONSES[$i]}")
         # Get timestamp for this response
         req_id="${request_order[$i]}"
         timestamp="${request_timestamps[$req_id]}"
-        time_display=""
-        if [[ -n "$timestamp" ]]; then
-            # Calculate time ago
-            now_epoch=$(date +%s)
-            msg_epoch=$(date -d "$timestamp" +%s 2>/dev/null || echo "$now_epoch")
-            diff_sec=$((now_epoch - msg_epoch))
-            
-            if [[ $diff_sec -lt 60 ]]; then
-                time_display=$(printf "[%4.1f sec ago]" "$diff_sec")
-            elif [[ $diff_sec -lt 3600 ]]; then
-                diff_min=$(echo "scale=1; $diff_sec / 60" | bc -l 2>/dev/null || echo "$((diff_sec/60))")
-                time_display=$(printf "[%4.1f min ago]" "$diff_min")
-            else
-                diff_hr=$(echo "scale=2; $diff_sec / 3600" | bc -l 2>/dev/null || echo "$((diff_sec/3600))")
-                time_display=$(printf "[%4.2f hrs ago]" "$diff_hr")
-            fi
-        fi
+        time_display=$(format_time_ago "$timestamp")
         # Pad response number to align
         num_display=$(printf "%3d" $((i+1)))
         echo "  $num_display $time_display: $PREVIEW" >&2
@@ -193,13 +221,7 @@ fi
 if [ "$RESPONSE_NUM" -gt "${#RESPONSES[@]}" ] || [ "$RESPONSE_NUM" -lt 1 ]; then
     echo "Invalid response number $RESPONSE_NUM. Available responses (1-${#RESPONSES[@]}):" >&2
     for i in "${!RESPONSES[@]}"; do
-        # Get first non-empty line as preview (truncate if too long)
-        PREVIEW=$(echo "${RESPONSES[$i]}" | grep -m1 -v '^[[:space:]]*$' | cut -c1-60 | tr -d '\n\r')
-        if [ -z "$PREVIEW" ]; then
-            PREVIEW="<empty response>"
-        elif [ ${#PREVIEW} -eq 60 ]; then
-            PREVIEW="${PREVIEW}..."
-        fi
+        PREVIEW=$(generate_preview "${RESPONSES[$i]}")
         echo "  $((i+1)): $PREVIEW" >&2
     done
     exit 2  # Use exit 2 to block and show stderr
@@ -208,23 +230,29 @@ fi
 # Get the selected response (adjust for 0-based indexing)
 SELECTED_RESPONSE="${RESPONSES[$((RESPONSE_NUM-1))]}"
 
-# Copy to clipboard (cross-platform)
-if command -v pbcopy >/dev/null 2>&1; then
-    # macOS
-    echo "$SELECTED_RESPONSE" | pbcopy
-elif command -v xclip >/dev/null 2>&1; then
-    # Linux
-    echo "$SELECTED_RESPONSE" | xclip -selection clipboard
-elif command -v clip.exe >/dev/null 2>&1; then
-    # Windows/WSL - use PowerShell to handle UTF-8 properly
-    echo "$SELECTED_RESPONSE" | powershell.exe -Command "\$OutputEncoding = [System.Text.Encoding]::UTF8; clip.exe"
-else
-    echo "No clipboard utility found (pbcopy, xclip, or clip.exe)" >&2
-    exit 1
+# Handle debug mode
+if [ "$DEBUG_MODE" = true ]; then
+    echo "=== DEBUG MODE ===" >&2
+    echo "Selected response content:" >&2
+    printf '%s\n' "$SELECTED_RESPONSE" >&2
+    echo "" >&2
+    echo "Byte count: $(printf '%s' "$SELECTED_RESPONSE" | wc -c)" >&2
+    echo "Character count: $(printf '%s' "$SELECTED_RESPONSE" | wc -m)" >&2
+    echo "Hexdump first 100 bytes:" >&2
+    printf '%s' "$SELECTED_RESPONSE" | head -c 100 | hexdump -C >&2
+    echo "" >&2
+    echo "Copying to clipboard..." >&2
+    # Continue to clipboard copy then exit with code 2 to show stderr
 fi
 
+# Copy to clipboard
+copy_to_clipboard "$SELECTED_RESPONSE"
+
 # Block the prompt from being processed and show success message
-if [ "$RESPONSE_NUM" -eq 1 ]; then
+if [ "$DEBUG_MODE" = true ]; then
+    # Exit with code 2 to ensure stderr debug output is shown to user
+    exit 2
+elif [ "$RESPONSE_NUM" -eq 1 ]; then
     echo '{"decision": "block", "reason": "Latest Claude response copied to clipboard!"}'
 else
     echo '{"decision": "block", "reason": "Claude response #'"$RESPONSE_NUM"' copied to clipboard!"}'
