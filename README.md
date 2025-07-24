@@ -2,6 +2,8 @@
 
 A Claude Code hook that adds a `/copy-response` command to quickly copy Claude's responses to your clipboard.
 
+![Demo](img/demo.gif)
+
 ## Features
 
 - 📋 **Quick Copy**: `/copy-response` copies the latest response
@@ -126,6 +128,17 @@ The script:
 
 - The script only finds text responses from Claude
 - Responses with only tool calls won't appear in the list
+
+**Hook not triggering?**
+
+- Do not create a custom slash command named `/copy-response` - this will prevent the hook from triggering
+
+## Limitations
+
+- Only copies text responses from Claude (responses with only tool calls won't appear)
+- The slash command WILL NOT AUTO-COMPLETE, this is because we are hooking UserPromptSubmission, which slash commands (that exist) do not trigger
+- Requires `jq` for JSON parsing
+- Platform-specific clipboard utilities must be installed
 
 ## Requirements
 
