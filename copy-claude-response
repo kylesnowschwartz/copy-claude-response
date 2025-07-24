@@ -63,15 +63,30 @@ copy_to_clipboard() {
     fi
 }
 
-# Read hook input to get transcript path and prompt
+# Read hook input
 INPUT=$(cat)
-TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path' 2>/dev/null)
-PROMPT=$(echo "$INPUT" | jq -r '.prompt' 2>/dev/null)
+
+# Try to extract prompt without jq first for pattern matching
+# This is a simple extraction that works for the basic case
+PROMPT=""
+if [[ "$INPUT" =~ \"prompt\":[[:space:]]*\"([^\"]+)\" ]]; then
+    PROMPT="${BASH_REMATCH[1]}"
+fi
 
 # Check if this is a copy-response command (with optional number, list, find, or debug)
 if [[ ! "$PROMPT" =~ ^/copy-response([[:space:]]+(list([[:space:]]+[0-9]+)?|find[[:space:]]+\"[^\"]+\"|debug([[:space:]]+[0-9]+)?|[0-9]+))?$ ]]; then
     exit 0  # Let other prompts proceed normally
 fi
+
+# Check if jq is installed (only needed when command matches)
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is not installed. Please install jq to use this script." >&2
+    exit 2
+fi
+
+# Now we can safely use jq to parse the full input
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path')
+PROMPT=$(echo "$INPUT" | jq -r '.prompt')
 
 # Parse the command
 LIST_MODE=false
