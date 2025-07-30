@@ -1,0 +1,13 @@
+{"requestId": "req1", "timestamp": "2024-01-15T10:00:00Z", "message": {"role": "user", "content": "How do I fix this error in my React component?"}}
+{"requestId": "req1", "timestamp": "2024-01-15T10:00:01Z", "message": {"role": "assistant", "content": [{"text": "I'll help you fix the React component error. First, let me see the error message."}]}}
+{"requestId": "req2", "timestamp": "2024-01-15T10:15:00Z", "message": {"role": "user", "content": "Please review this code and suggest improvements:\n\nfunction calculateTotal(items) {\n  return items.reduce((sum, item) => sum + item.price, 0);\n}"}}
+{"requestId": "req2", "timestamp": "2024-01-15T10:15:01Z", "message": {"role": "assistant", "content": [{"text": "Your code looks good! Here are a few suggestions:"}]}}
+{"requestId": "req2", "timestamp": "2024-01-15T10:15:02Z", "message": {"role": "assistant", "content": [{"text": "\n\n1. Add input validation\n2. Consider edge cases like empty arrays\n3. Add JSDoc comments"}]}}
+{"requestId": "req3", "timestamp": "2024-01-15T10:30:00Z", "message": {"role": "user", "content": "Can you help me debug this API integration? The authentication is failing."}}
+{"requestId": "req3", "timestamp": "2024-01-15T10:30:01Z", "message": {"role": "assistant", "content": [{"text": "Let's debug the API authentication issue step by step. What specific error are you seeing?"}]}}
+{"requestId": "req4", "timestamp": "2024-01-15T10:45:00Z", "message": {"role": "user", "content": "This is a very long user prompt that should be truncated when shown in preview mode because it exceeds the preview length limit of 60 characters and should end with ellipsis"}}
+{"requestId": "req4", "timestamp": "2024-01-15T10:45:01Z", "message": {"role": "assistant", "content": [{"text": "This is a very long assistant response that should also be truncated when shown in preview mode because it exceeds the preview length limit of 60 characters and should end with ellipsis"}]}}
+{"requestId": "req5", "timestamp": "2024-01-15T11:00:00Z", "message": {"role": "user", "content": ""}}
+{"requestId": "req5", "timestamp": "2024-01-15T11:00:01Z", "message": {"role": "assistant", "content": [{"text": ""}]}}
+{"requestId": "req6", "timestamp": "2024-01-15T11:15:00Z", "message": {"role": "user", "content": "Testing UTF-8: 你好世界 🚀 émojis"}}
+{"requestId": "req6", "timestamp": "2024-01-15T11:15:01Z", "message": {"role": "assistant", "content": [{"text": "UTF-8 test response: 你好世界 🚀 émojis work perfectly!"}]}}
