@@ -73,8 +73,8 @@ if [[ "$INPUT" =~ \"prompt\":[[:space:]]*\"([^\"]+)\" ]]; then
     PROMPT="${BASH_REMATCH[1]}"
 fi
 
-# Check if this is a copy-response command (with optional number, list, find, or debug)
-if [[ ! "$PROMPT" =~ ^/copy-response([[:space:]]+(list([[:space:]]+[0-9]+)?|find[[:space:]]+\"[^\"]+\"|debug([[:space:]]+[0-9]+)?|[0-9]+))?$ ]]; then
+# Check if this is a copy-response or copy-prompt command (with optional number, list, find, or debug)
+if [[ ! "$PROMPT" =~ ^/copy-(response|prompt)([[:space:]]+(list([[:space:]]+[0-9]+)?|find[[:space:]]+\"[^\"]+\"|debug([[:space:]]+[0-9]+)?|[0-9]+))?$ ]]; then
     exit 0  # Let other prompts proceed normally
 fi
 
@@ -88,6 +88,12 @@ fi
 TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path')
 PROMPT=$(echo "$INPUT" | jq -r '.prompt')
 
+# Determine if we're copying responses or prompts
+COPY_MODE="response"
+if [[ "$PROMPT" =~ ^/copy-prompt ]]; then
+    COPY_MODE="prompt"
+fi
+
 # Parse the command
 LIST_MODE=false
 FIND_MODE=false
@@ -96,23 +102,23 @@ SEARCH_TERM=""
 RESPONSE_NUM=1
 LIST_COUNT=$DEFAULT_LIST_COUNT
 
-if [[ "$PROMPT" =~ ^/copy-response[[:space:]]+list([[:space:]]+([0-9]+))?$ ]]; then
+if [[ "$PROMPT" =~ ^/copy-(response|prompt)[[:space:]]+list([[:space:]]+([0-9]+))?$ ]]; then
     LIST_MODE=true
-    if [ -n "${BASH_REMATCH[2]}" ]; then
-        LIST_COUNT=${BASH_REMATCH[2]}
+    if [ -n "${BASH_REMATCH[3]}" ]; then
+        LIST_COUNT=${BASH_REMATCH[3]}
     fi
-elif [[ "$PROMPT" =~ ^/copy-response[[:space:]]+find[[:space:]]+\"([^\"]+)\"$ ]]; then
+elif [[ "$PROMPT" =~ ^/copy-(response|prompt)[[:space:]]+find[[:space:]]+\"([^\"]+)\"$ ]]; then
     FIND_MODE=true
-    SEARCH_TERM="${BASH_REMATCH[1]}"
-elif [[ "$PROMPT" =~ ^/copy-response[[:space:]]+debug([[:space:]]+([0-9]+))?$ ]]; then
+    SEARCH_TERM="${BASH_REMATCH[2]}"
+elif [[ "$PROMPT" =~ ^/copy-(response|prompt)[[:space:]]+debug([[:space:]]+([0-9]+))?$ ]]; then
     DEBUG_MODE=true
     echo "DEBUG: Matched debug command" >&2
-    if [ -n "${BASH_REMATCH[2]}" ]; then
-        RESPONSE_NUM=${BASH_REMATCH[2]}
-        echo "DEBUG: Set response num to ${BASH_REMATCH[2]}" >&2
+    if [ -n "${BASH_REMATCH[3]}" ]; then
+        RESPONSE_NUM=${BASH_REMATCH[3]}
+        echo "DEBUG: Set response num to ${BASH_REMATCH[3]}" >&2
     fi
-elif [[ "$PROMPT" =~ ^/copy-response[[:space:]]+([0-9]+)$ ]]; then
-    RESPONSE_NUM=${BASH_REMATCH[1]}
+elif [[ "$PROMPT" =~ ^/copy-(response|prompt)[[:space:]]+([0-9]+)$ ]]; then
+    RESPONSE_NUM=${BASH_REMATCH[2]}
 fi
 
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
@@ -120,36 +126,72 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
     exit 1
 fi
 
+# Basic path validation - ensure transcript path doesn't contain suspicious patterns
+if [[ "$TRANSCRIPT_PATH" =~ \.\. ]] || [[ "$TRANSCRIPT_PATH" =~ ^/ ]] && [[ ! "$TRANSCRIPT_PATH" =~ ^/.*\.claude/.*transcript ]]; then
+    echo "Invalid transcript path format" >&2
+    exit 1
+fi
+
 # Get the last N assistant responses grouped by requestId (use LIST_COUNT if in list mode, otherwise all responses)
 MAX_RESPONSES=$( [ "$LIST_MODE" = true ] && echo "$LIST_COUNT" || echo $MAX_RESPONSES )
 
-# Group responses by requestId and concatenate fragments
+# Group messages by requestId and concatenate fragments
 declare -A response_groups
+declare -A prompt_groups
 declare -a request_order
+
+# Determine which role to look for
+TARGET_ROLE="assistant"
+if [[ "$COPY_MODE" == "prompt" ]]; then
+    TARGET_ROLE="user"
+fi
 
 # Process transcript in forward order to build groups correctly
 declare -A seen_requests
 while read -r line; do
-    if echo "$line" | jq -e '.message.role == "assistant"' >/dev/null 2>&1; then
+    if echo "$line" | jq -e ".message.role == \"$TARGET_ROLE\"" >/dev/null 2>&1; then
         request_id=$(echo "$line" | jq -r '.requestId')
-        content=$(echo "$line" | jq -r '.message.content[0].text // ""')
+        
+        if [[ "$TARGET_ROLE" == "assistant" ]]; then
+            content=$(echo "$line" | jq -r '.message.content[0].text // ""')
+            target_groups="response_groups"
+        else
+            content=$(echo "$line" | jq -r '.message.content // ""')
+            target_groups="prompt_groups"
+        fi
         
         # If we haven't seen this requestId before, initialize it
         if [[ -z "${seen_requests[$request_id]}" ]]; then
             seen_requests["$request_id"]=1
-            response_groups["$request_id"]=""
+            if [[ "$TARGET_ROLE" == "assistant" ]]; then
+                response_groups["$request_id"]=""
+            else
+                prompt_groups["$request_id"]=""
+            fi
         fi
         
         # Append content (processing in forward order)
         if [[ -n "$content" ]]; then
-            if [[ -n "${response_groups[$request_id]}" ]]; then
-                response_groups["$request_id"]+=$'\n'"$content"
+            if [[ "$TARGET_ROLE" == "assistant" ]]; then
+                if [[ -n "${response_groups[$request_id]}" ]]; then
+                    response_groups["$request_id"]+=$'\n'"$content"
+                else
+                    response_groups["$request_id"]="$content"
+                fi
             else
-                response_groups["$request_id"]="$content"
+                if [[ -n "${prompt_groups[$request_id]}" ]]; then
+                    prompt_groups["$request_id"]+=$'\n'"$content"
+                else
+                    prompt_groups["$request_id"]="$content"
+                fi
             fi
         else
-            # Empty response = newline
-            response_groups["$request_id"]+=$'\n'
+            # Empty content = newline
+            if [[ "$TARGET_ROLE" == "assistant" ]]; then
+                response_groups["$request_id"]+=$'\n'
+            else
+                prompt_groups["$request_id"]+=$'\n'
+            fi
         fi
     fi
 done < "$TRANSCRIPT_PATH"
@@ -157,15 +199,19 @@ done < "$TRANSCRIPT_PATH"
 # Get request order (newest first) and timestamps by processing in reverse
 declare -A request_timestamps
 while read -r line; do
-    if echo "$line" | jq -e '.message.role == "assistant"' >/dev/null 2>&1; then
+    if echo "$line" | jq -e ".message.role == \"$TARGET_ROLE\"" >/dev/null 2>&1; then
         request_id=$(echo "$line" | jq -r '.requestId')
         timestamp=$(echo "$line" | jq -r '.timestamp // .message.timestamp // ""')
         
-        # Add to order if not already added and response has content
+        # Add to order if not already added and group has content
         if [[ ! " ${request_order[@]} " =~ " ${request_id} " ]]; then
-            # Only add if the response group has actual content (not just whitespace/newlines)
+            # Only add if the group has actual content (not just whitespace/newlines)
             # Use printf to preserve UTF-8 encoding and avoid tr which can corrupt multibyte chars
-            cleaned_content=$(printf '%s' "${response_groups[$request_id]}" | sed 's/[[:space:]]//g')
+            if [[ "$TARGET_ROLE" == "assistant" ]]; then
+                cleaned_content=$(printf '%s' "${response_groups[$request_id]}" | sed 's/[[:space:]]//g')
+            else
+                cleaned_content=$(printf '%s' "${prompt_groups[$request_id]}" | sed 's/[[:space:]]//g')
+            fi
             if [[ -n "$cleaned_content" ]]; then
                 request_order+=("$request_id")
                 request_timestamps["$request_id"]="$timestamp"
@@ -178,14 +224,22 @@ done < <(tac "$TRANSCRIPT_PATH")
 RESPONSES=()
 for request_id in "${request_order[@]}"; do
     if [[ ${#RESPONSES[@]} -lt $MAX_RESPONSES ]]; then
-        RESPONSES+=("${response_groups[$request_id]}")
+        if [[ "$COPY_MODE" == "prompt" ]]; then
+            RESPONSES+=("${prompt_groups[$request_id]}")
+        else
+            RESPONSES+=("${response_groups[$request_id]}")
+        fi
     else
         break
     fi
 done
 
 if [ ${#RESPONSES[@]} -eq 0 ]; then
-    echo "No assistant text responses found" >&2
+    if [[ "$COPY_MODE" == "prompt" ]]; then
+        echo "No user prompts found" >&2
+    else
+        echo "No assistant text responses found" >&2
+    fi
     exit 1
 fi
 
@@ -193,48 +247,61 @@ fi
 if [ "$FIND_MODE" = true ]; then
     echo "Searching for \"$SEARCH_TERM\":" >&2
     found_count=0
+    item_type="responses"
+    if [[ "$COPY_MODE" == "prompt" ]]; then
+        item_type="prompts"
+    fi
+    
     for i in $(seq $((${#RESPONSES[@]}-1)) -1 0); do
-        # Case-insensitive search in response content
-        if echo "${RESPONSES[$i]}" | grep -qi "$SEARCH_TERM"; then
+        # Case-insensitive search in content (use -F for literal string matching)
+        if echo "${RESPONSES[$i]}" | grep -qiF "$SEARCH_TERM"; then
             found_count=$((found_count + 1))
             PREVIEW=$(generate_preview "${RESPONSES[$i]}")
-            # Get timestamp for this response
+            # Get timestamp for this item
             req_id="${request_order[$i]}"
             timestamp="${request_timestamps[$req_id]}"
             time_display=$(format_time_ago "$timestamp")
-            # Pad response number to align
+            # Pad item number to align
             num_display=$(printf "%3d" $((i+1)))
             echo "  $num_display $time_display: $PREVIEW" >&2
         fi
     done
     if [[ $found_count -eq 0 ]]; then
-        echo "No responses found matching \"$SEARCH_TERM\"" >&2
+        echo "No $item_type found matching \"$SEARCH_TERM\"" >&2
     else
-        echo "Found $found_count matching responses" >&2
+        echo "Found $found_count matching $item_type" >&2
     fi
     exit 2  # Use exit 2 to block and show stderr
 fi
 
 # Handle list mode
 if [ "$LIST_MODE" = true ]; then
-    echo "Available responses (1-${#RESPONSES[@]}):" >&2
+    item_type="responses"
+    if [[ "$COPY_MODE" == "prompt" ]]; then
+        item_type="prompts"
+    fi
+    echo "Available $item_type (1-${#RESPONSES[@]}):" >&2
     # Display in reverse order (highest numbers first)
     for i in $(seq $((${#RESPONSES[@]}-1)) -1 0); do
         PREVIEW=$(generate_preview "${RESPONSES[$i]}")
-        # Get timestamp for this response
+        # Get timestamp for this item
         req_id="${request_order[$i]}"
         timestamp="${request_timestamps[$req_id]}"
         time_display=$(format_time_ago "$timestamp")
-        # Pad response number to align
+        # Pad item number to align
         num_display=$(printf "%3d" $((i+1)))
         echo "  $num_display $time_display: $PREVIEW" >&2
     done
     exit 2  # Use exit 2 to block and show stderr
 fi
 
-# If response number is out of range, show available options
+# If item number is out of range, show available options
 if [ "$RESPONSE_NUM" -gt "${#RESPONSES[@]}" ] || [ "$RESPONSE_NUM" -lt 1 ]; then
-    echo "Invalid response number $RESPONSE_NUM. Available responses (1-${#RESPONSES[@]}):" >&2
+    item_type="responses"
+    if [[ "$COPY_MODE" == "prompt" ]]; then
+        item_type="prompts"
+    fi
+    echo "Invalid $(echo $item_type | sed 's/s$//' ) number $RESPONSE_NUM. Available $item_type (1-${#RESPONSES[@]}):" >&2
     for i in "${!RESPONSES[@]}"; do
         PREVIEW=$(generate_preview "${RESPONSES[$i]}")
         echo "  $((i+1)): $PREVIEW" >&2
@@ -268,7 +335,16 @@ if [ "$DEBUG_MODE" = true ]; then
     # Exit with code 2 to ensure stderr debug output is shown to user
     exit 2
 elif [ "$RESPONSE_NUM" -eq 1 ]; then
-    echo '{"decision": "block", "reason": "Latest Claude response copied to clipboard!"}'
+    if [[ "$COPY_MODE" == "prompt" ]]; then
+        echo '{"decision": "block", "reason": "Latest user prompt copied to clipboard!"}'
+    else
+        echo '{"decision": "block", "reason": "Latest Claude response copied to clipboard!"}'
+    fi
 else
-    echo '{"decision": "block", "reason": "Claude response #'"$RESPONSE_NUM"' copied to clipboard!"}'
+    if [[ "$COPY_MODE" == "prompt" ]]; then
+        echo '{"decision": "block", "reason": "User prompt #'"$RESPONSE_NUM"' copied to clipboard!"}'
+    else
+        echo '{"decision": "block", "reason": "Claude response #'"$RESPONSE_NUM"' copied to clipboard!"}'
+    fi
 fi
+
