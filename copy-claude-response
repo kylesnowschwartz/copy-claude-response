@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/local/bin/bash
 
 # Constants
 PREVIEW_LENGTH=60
@@ -10,7 +10,7 @@ generate_preview() {
     local response="$1"
     # Get first non-empty line as preview (truncate if too long)
     # Use printf and avoid tr to preserve UTF-8 encoding
-    local preview=$(printf '%s' "$response" | grep -m1 -v '^[[:space:]]*$' | cut -c1-$PREVIEW_LENGTH | sed 's/[\n\r]//g')
+    local preview=$(printf '%s' "$response" | grep -m1 -v '^[[:space:]]*$' | cut -c1-$PREVIEW_LENGTH | tr -d '\n\r')
     if [ -z "$preview" ]; then
         preview="<empty response>"
     elif [ ${#preview} -eq $PREVIEW_LENGTH ]; then
@@ -75,7 +75,8 @@ fi
 
 # Check if this is a copy-response or copy-prompt command (with optional number, list, find, or debug)
 if [[ ! "$PROMPT" =~ ^/copy-(response|prompt)([[:space:]]+(list([[:space:]]+[0-9]+)?|find[[:space:]]+\"[^\"]+\"|debug([[:space:]]+[0-9]+)?|[0-9]+))?$ ]]; then
-    exit 0  # Let other prompts proceed normally
+    echo '{"decision": "approve"}'  # Let other prompts proceed normally
+    exit 0
 fi
 
 # Check if jq is installed (only needed when command matches)
@@ -127,7 +128,7 @@ if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
 fi
 
 # Basic path validation - ensure transcript path doesn't contain suspicious patterns
-if [[ "$TRANSCRIPT_PATH" =~ \.\. ]] || [[ "$TRANSCRIPT_PATH" =~ ^/ ]] && [[ ! "$TRANSCRIPT_PATH" =~ ^/.*\.claude/.*transcript ]]; then
+if [[ "$TRANSCRIPT_PATH" =~ \.\. ]]; then
     echo "Invalid transcript path format" >&2
     exit 1
 fi
