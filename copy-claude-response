@@ -66,15 +66,9 @@ copy_to_clipboard() {
 # Read hook input
 INPUT=$(cat)
 
-# Try to extract prompt without jq first for pattern matching
-# This is a simple extraction that works for the basic case
-PROMPT=""
-if [[ "$INPUT" =~ \"prompt\":[[:space:]]*\"([^\"]+)\" ]]; then
-    PROMPT="${BASH_REMATCH[1]}"
-fi
-
-# Check if this is a copy-response or copy-prompt command (with optional number, list, find, or debug)
-if [[ ! "$PROMPT" =~ ^/copy-(response|prompt)([[:space:]]+(list([[:space:]]+[0-9]+)?|find[[:space:]]+\"[^\"]+\"|debug([[:space:]]+[0-9]+)?|[0-9]+))?$ ]]; then
+# Check if this looks like a copy command by looking for the basic pattern in the JSON
+# This avoids complex JSON parsing for the initial check
+if [[ ! "$INPUT" =~ /copy-(response|prompt) ]]; then
     echo '{"decision": "approve"}'  # Let other prompts proceed normally
     exit 0
 fi
@@ -122,14 +116,14 @@ elif [[ "$PROMPT" =~ ^/copy-(response|prompt)[[:space:]]+([0-9]+)$ ]]; then
     RESPONSE_NUM=${BASH_REMATCH[2]}
 fi
 
-if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
-    echo "No valid transcript path found" >&2
-    exit 1
-fi
-
 # Basic path validation - ensure transcript path doesn't contain suspicious patterns
 if [[ "$TRANSCRIPT_PATH" =~ \.\. ]]; then
     echo "Invalid transcript path format" >&2
+    exit 1
+fi
+
+if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
+    echo "No valid transcript path found" >&2
     exit 1
 fi
 

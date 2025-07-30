@@ -52,12 +52,9 @@ create_hook_input() {
     local prompt="$1"
     local transcript_path="$2"
     
-    cat <<EOF
-{
-    "prompt": "$prompt",
-    "transcript_path": "$transcript_path"
-}
-EOF
+    # Use jq to properly escape JSON strings
+    jq -n --arg prompt "$prompt" --arg transcript_path "$transcript_path" \
+        '{prompt: $prompt, transcript_path: $transcript_path}'
 }
 
 # Clean up test files

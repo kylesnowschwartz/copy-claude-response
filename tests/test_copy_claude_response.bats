@@ -120,7 +120,7 @@ teardown() {
     input=$(create_hook_input "/other-command" "$TEST_TRANSCRIPT")
     run bash -c "echo '$input' | '$SCRIPT_PATH'"
     [ $status -eq 0 ]
-    [ "$output" = "" ]  # Should exit silently
+    [ "$output" = '{"decision": "approve"}' ]  # Should return approve for non-copy commands
 }
 
 # Integration Tests - List Mode
@@ -245,7 +245,7 @@ teardown() {
     input=$(create_hook_input "/copy-response list" "$TEST_TRANSCRIPT")
     run bash -c "echo '$input' | '$SCRIPT_PATH'"
     [ $status -eq 2 ]
-    [[ "$output" =~ "\[.*ago\]" ]]
+    [[ "$output" =~ \[.*ago\] ]]
 }
 
 @test "list mode shows truncated previews" {
@@ -253,7 +253,7 @@ teardown() {
     run bash -c "echo '$input' | '$SCRIPT_PATH'"
     [ $status -eq 2 ]
     # Should show the long response truncated with ellipsis
-    [[ "$output" =~ "\.\.\.:" ]]
+    [[ "$output" =~ \.\.\. ]]
 }
 
 # JSON Output Validation
@@ -336,8 +336,8 @@ teardown() {
     local output=$(run_script_with_input "$input")
     
     # Should return proper JSON with "block" decision and reason
-    [[ "$output" =~ "decision.*block" ]]
-    [[ "$output" =~ "reason.*Latest Claude response copied to clipboard" ]]
+    [[ "$output" =~ decision.*block ]]
+    [[ "$output" =~ reason.*Latest\ Claude\ response\ copied\ to\ clipboard ]]
     
     # Verify it's valid JSON
     echo "$output" | jq . > /dev/null
@@ -355,8 +355,8 @@ teardown() {
     local output=$(run_script_with_input "$input")
     
     # Should return proper JSON with "block" decision and reason
-    [[ "$output" =~ "decision.*block" ]]
-    [[ "$output" =~ "reason.*Latest user prompt copied to clipboard" ]]
+    [[ "$output" =~ decision.*block ]]
+    [[ "$output" =~ reason.*Latest\ user\ prompt\ copied\ to\ clipboard ]]
     
     # Verify it's valid JSON
     echo "$output" | jq . > /dev/null
@@ -401,12 +401,11 @@ teardown() {
     local suspicious_path="/tmp/../etc/passwd"
     local input=$(create_hook_input "/copy-response" "$suspicious_path")
     
-    local output=$(run_script_with_input "$input" 2>&1)
-    local exit_code=$?
+    run bash -c "echo '$input' | '$SCRIPT_PATH'"
     
     # Should reject suspicious paths (exit code 1)
-    [[ $exit_code -eq 1 ]]
-    [[ "$output" =~ "Invalid transcript path format" ]]
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ Invalid\ transcript\ path\ format ]]
     
     rm -f "$transcript_file"
 }
@@ -418,10 +417,9 @@ teardown() {
     local nonexistent_path="/tmp/nonexistent_transcript.json"
     local input=$(create_hook_input "/copy-response" "$nonexistent_path")
     
-    local output=$(run_script_with_input "$input" 2>&1)
-    local exit_code=$?
+    run bash -c "echo '$input' | '$SCRIPT_PATH'"
     
     # Should reject non-existent files (exit code 1)
-    [[ $exit_code -eq 1 ]]
-    [[ "$output" =~ "No valid transcript path found" ]]
+    [[ $status -eq 1 ]]
+    [[ "$output" =~ No\ valid\ transcript\ path\ found ]]
 }
