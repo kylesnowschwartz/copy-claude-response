@@ -371,11 +371,12 @@ teardown() {
     local transcript_file=$(mktemp)
     create_test_transcript "$transcript_file"
     
-    # Test with a realistic Claude transcript path
-    local claude_transcript="/Users/kyle/.claude/sessions/session123/transcript.json"
+    # Use a temporary directory that mimics the real structure
+    local temp_claude_dir=$(mktemp -d)
+    local claude_transcript="$temp_claude_dir/.claude/sessions/session123/transcript.json"
     local input=$(create_hook_input "/copy-response" "$claude_transcript")
     
-    # Create the transcript file at the expected path for validation
+    # Create the transcript file at the temporary path for validation
     mkdir -p "$(dirname "$claude_transcript")"
     cp "$transcript_file" "$claude_transcript"
     
@@ -385,8 +386,8 @@ teardown() {
     # Should not reject valid paths (exit code 0 means approve, 1 means block, 2 means block with stderr)
     [[ $exit_code -ne 1 ]]
     
-    # Cleanup
-    rm -rf "/Users/kyle/.claude" 2>/dev/null || true
+    # Cleanup - remove only our temporary directory
+    rm -rf "$temp_claude_dir"
     rm -f "$transcript_file"
 }
 
