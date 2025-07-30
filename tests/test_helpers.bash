@@ -122,14 +122,8 @@ PREVIEW_LENGTH=60
 generate_preview() {
     local response="$1"
     # Get first non-empty line as preview (truncate if too long)
-    # Use printf and avoid tr to preserve UTF-8 encoding
-    local preview=$(printf '%s' "$response" | grep -m1 -v '^[[:space:]]*$' | tr -d '\n\r')
-    
-    # Truncate if too long (using bash substring instead of cut for macOS compatibility)
-    if [ ${#preview} -gt $PREVIEW_LENGTH ]; then
-        preview="${preview:0:$PREVIEW_LENGTH}"
-    fi
-    
+    # Use printf and tr to preserve UTF-8 encoding - match main script behavior
+    local preview=$(printf '%s' "$response" | grep -m1 -v '^[[:space:]]*$' | cut -c1-$PREVIEW_LENGTH | tr -d '\n\r')
     if [ -z "$preview" ]; then
         preview="<empty response>"
     elif [ ${#preview} -eq $PREVIEW_LENGTH ]; then

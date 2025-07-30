@@ -266,3 +266,161 @@ teardown() {
     echo "$output" | jq . >/dev/null
     [[ "$output" =~ "\"decision\":" ]] && [[ "$output" =~ "\"reason\":" ]]
 }
+
+# Regression tests for character corruption bug
+@test "generate_preview preserves literal 'n' and 'r' characters" {
+    source $(extract_functions)
+    
+    # Test text that contains literal 'n' and 'r' characters that should NOT be removed
+    local test_text="I understand you're testing functionality"
+    result=$(generate_preview "$test_text")
+    
+    # Should preserve 'n' and 'r' characters (not remove them like the sed bug did)
+    [[ "$result" == "I understand you're testing functionality" ]]
+    
+    # Verify specific characters are preserved
+    [[ "$result" =~ n ]]  # 'n' in "understand"
+    [[ "$result" =~ r ]]  # 'r' in "understand" and "you're"
+}
+
+@test "generate_preview removes actual newlines correctly" {
+    source $(extract_functions)
+    
+    # Test text with actual newlines and carriage returns
+    local test_text=$'First line\nSecond line\rThird line'
+    result=$(generate_preview "$test_text")
+    
+    # Should take the first line and remove any trailing newlines
+    # The function uses grep -m1 which gets the first non-empty line
+    [[ "$result" == "First line" ]]
+}
+
+@test "tr vs sed character preservation" {
+    # This test demonstrates the fix for the character corruption bug
+    local test_text="I understand you're testing"
+    
+    # tr correctly preserves literal 'n' and 'r' characters
+    local result_tr=$(echo "$test_text" | tr -d '\n\r')
+    [[ "$result_tr" == "I understand you're testing" ]]
+    
+    # sed with character class incorrectly removes literal 'n' and 'r' 
+    local result_sed=$(echo "$test_text" | sed 's/[nr]//g')
+    [[ "$result_sed" == "I udestad you'e testig" ]]
+    
+    # This demonstrates why we switched from sed to tr
+}
+
+# Tests for Claude Code hook JSON schema compliance
+@test "hook returns approve for non-copy commands" {
+    setup_test_env
+    
+    local transcript_file=$(mktemp)
+    create_test_transcript "$transcript_file"
+    
+    local input=$(create_hook_input "Hello Claude" "$transcript_file")
+    local output=$(run_script_with_input "$input")
+    
+    # Should return proper JSON with "approve" decision
+    [[ "$output" == '{"decision": "approve"}' ]]
+    
+    rm -f "$transcript_file"
+}
+
+@test "hook returns block with proper JSON for copy-response commands" {
+    setup_test_env
+    
+    local transcript_file=$(mktemp)
+    create_test_transcript "$transcript_file"
+    
+    local input=$(create_hook_input "/copy-response" "$transcript_file")
+    local output=$(run_script_with_input "$input")
+    
+    # Should return proper JSON with "block" decision and reason
+    [[ "$output" =~ "decision.*block" ]]
+    [[ "$output" =~ "reason.*Latest Claude response copied to clipboard" ]]
+    
+    # Verify it's valid JSON
+    echo "$output" | jq . > /dev/null
+    
+    rm -f "$transcript_file"
+}
+
+@test "hook returns block with proper JSON for copy-prompt commands" {
+    setup_test_env
+    
+    local transcript_file=$(mktemp)
+    create_test_transcript "$transcript_file"
+    
+    local input=$(create_hook_input "/copy-prompt" "$transcript_file")
+    local output=$(run_script_with_input "$input")
+    
+    # Should return proper JSON with "block" decision and reason
+    [[ "$output" =~ "decision.*block" ]]
+    [[ "$output" =~ "reason.*Latest user prompt copied to clipboard" ]]
+    
+    # Verify it's valid JSON
+    echo "$output" | jq . > /dev/null
+    
+    rm -f "$transcript_file"
+}
+
+# Tests for path validation logic
+@test "accepts valid Claude transcript paths" {
+    setup_test_env
+    
+    local transcript_file=$(mktemp)
+    create_test_transcript "$transcript_file"
+    
+    # Test with a realistic Claude transcript path
+    local claude_transcript="/Users/kyle/.claude/sessions/session123/transcript.json"
+    local input=$(create_hook_input "/copy-response" "$claude_transcript")
+    
+    # Create the transcript file at the expected path for validation
+    mkdir -p "$(dirname "$claude_transcript")"
+    cp "$transcript_file" "$claude_transcript"
+    
+    local output=$(run_script_with_input "$input" 2>&1)
+    local exit_code=$?
+    
+    # Should not reject valid paths (exit code 0 means approve, 1 means block, 2 means block with stderr)
+    [[ $exit_code -ne 1 ]]
+    
+    # Cleanup
+    rm -rf "/Users/kyle/.claude" 2>/dev/null || true
+    rm -f "$transcript_file"
+}
+
+@test "rejects paths containing double dots" {
+    setup_test_env
+    
+    local transcript_file=$(mktemp)
+    create_test_transcript "$transcript_file"
+    
+    # Test with path containing suspicious .. pattern
+    local suspicious_path="/tmp/../etc/passwd"
+    local input=$(create_hook_input "/copy-response" "$suspicious_path")
+    
+    local output=$(run_script_with_input "$input" 2>&1)
+    local exit_code=$?
+    
+    # Should reject suspicious paths (exit code 1)
+    [[ $exit_code -eq 1 ]]
+    [[ "$output" =~ "Invalid transcript path format" ]]
+    
+    rm -f "$transcript_file"
+}
+
+@test "rejects non-existent transcript files" {
+    setup_test_env
+    
+    # Test with non-existent file
+    local nonexistent_path="/tmp/nonexistent_transcript.json"
+    local input=$(create_hook_input "/copy-response" "$nonexistent_path")
+    
+    local output=$(run_script_with_input "$input" 2>&1)
+    local exit_code=$?
+    
+    # Should reject non-existent files (exit code 1)
+    [[ $exit_code -eq 1 ]]
+    [[ "$output" =~ "No valid transcript path found" ]]
+}
