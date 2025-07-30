@@ -1,16 +1,16 @@
-# Claude Code Response Copier
+# Claude Code Response & Prompt Copier
 
-A Claude Code hook that adds a `/copy-response` command to quickly copy Claude's responses to your clipboard.
+A Claude Code hook that adds `/copy-response` and `/copy-prompt` commands to quickly copy Claude's responses or your prompts to your clipboard.
 
 ![Demo](img/demo.gif)
 
 ## Features
 
-- 📋 **Quick Copy**: `/copy-response` copies the latest response
-- 🔢 **Numbered Access**: `/copy-response 3` copies a specific response
-- 📝 **List Responses**: `/copy-response list` shows available responses with previews
-- 🔍 **Search Responses**: `/copy-response find "keyword"` finds responses containing text
-- ⏰ **Timestamps**: Shows when each response was created
+- 📋 **Quick Copy**: `/copy-response` copies the latest response, `/copy-prompt` copies the latest prompt
+- 🔢 **Numbered Access**: `/copy-response 3` or `/copy-prompt 2` copies a specific item
+- 📝 **List Items**: `/copy-response list` or `/copy-prompt list` shows available items with previews
+- 🔍 **Search Content**: `/copy-response find "keyword"` or `/copy-prompt find "text"` finds items containing text
+- ⏰ **Timestamps**: Shows when each response or prompt was created
 - 🖥️ **Cross-Platform**: Works on macOS, Linux, and Windows/WSL
 
 ## Installation
@@ -58,6 +58,11 @@ A Claude Code hook that adds a `/copy-response` command to quickly copy Claude's
 | `/copy-response list` | List last 10 responses with previews |
 | `/copy-response list 5` | List last 5 responses |
 | `/copy-response find "error"` | Find responses containing "error" |
+| `/copy-prompt` | Copy the latest user prompt |
+| `/copy-prompt 3` | Copy prompt #3 |
+| `/copy-prompt list` | List last 10 prompts with previews |
+| `/copy-prompt list 7` | List last 7 prompts |
+| `/copy-prompt find "debug"` | Find prompts containing "debug" |
 
 ### Examples
 
@@ -95,14 +100,35 @@ Searching for "git commit":
 Found 2 matching responses
 ```
 
+**Copy latest prompt:**
+
+```
+/copy-prompt
+```
+
+> Latest user prompt copied to clipboard!
+
+**List recent prompts:**
+
+```
+/copy-prompt list
+```
+
+```
+Available prompts (1-3):
+    3 [ 1.2 min ago]: How do I fix this error in my React component?
+    2 [12.5 min ago]: Please review this code and suggest improvements
+    1 [ 45.3 min ago]: Can you help me debug this API integration?
+```
+
 ## How It Works
 
 The script:
 
-1. **Intercepts** `/copy-response` commands before Claude processes them
-2. **Parses** the conversation transcript to extract Claude's responses
-3. **Groups** multi-part responses by request ID for complete responses
-4. **Copies** the selected response to your system clipboard
+1. **Intercepts** `/copy-response` and `/copy-prompt` commands before Claude processes them
+2. **Parses** the conversation transcript to extract Claude's responses or user prompts
+3. **Groups** multi-part messages by request ID for complete content
+4. **Copies** the selected response or prompt to your system clipboard
 5. **Blocks** the command from reaching Claude to prevent confusion
 
 ## Platform Support
@@ -131,12 +157,13 @@ The script:
 
 **Hook not triggering?**
 
-- Do not create a custom slash command named `/copy-response` - this will prevent the hook from triggering
+- Do not create custom slash commands named `/copy-response` or `/copy-prompt` - this will prevent the hook from triggering
 
 ## Limitations
 
 - Only copies text responses from Claude (responses with only tool calls won't appear)
-- The slash command WILL NOT AUTO-COMPLETE, this is because we are hooking UserPromptSubmission, which slash commands (that exist) do not trigger
+- Only copies text prompts from users (prompts with only images or attachments won't appear)
+- The slash commands WILL NOT AUTO-COMPLETE, this is because we are hooking UserPromptSubmission, which slash commands (that exist) do not trigger
 - Requires `jq` for JSON parsing
 - Platform-specific clipboard utilities must be installed
 
